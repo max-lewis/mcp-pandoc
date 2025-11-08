@@ -1,17 +1,18 @@
 FROM pandoc/latex:latest
 
-# Alpine uses apk (not apt-get)
+# Alpine uses apk; install Python + pip
 RUN apk add --no-cache python3 py3-pip
 
-# App deps
+# ---- Python deps in a virtualenv (PEP 668 safe) ----
 COPY requirements.txt /app/requirements.txt
-RUN pip3 install -r /app/requirements.txt
+RUN python3 -m venv /venv \
+ && /venv/bin/pip install --no-cache-dir -r /app/requirements.txt
+# Make venv tools (uvicorn, etc.) first on PATH
+ENV PATH="/venv/bin:${PATH}"
 
+# ---- App code ----
 WORKDIR /app
 COPY server.py /app/server.py
-
-# If you previously tried to copy example templates, comment it out for now
-# COPY examples/defaults /templates
 
 EXPOSE 8080
 ENV PORT=8080
