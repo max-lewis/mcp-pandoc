@@ -1,0 +1,27 @@
+\documentclass[11pt]{article}
+
+% No lmodern package here. We rely on XeLaTeX + fontspec with system fonts.
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX,Scale=MatchLowercase}
+
+% Pandoc variables for fonts (set via -V mainfont=... etc.)
+$if(mainfont)$\setmainfont{$mainfont$}$endif$
+$if(sansfont)$\setsansfont{$sansfont$}$endif$
+$if(monofont)$\setmonofont{$monofont$}$endif$
+
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\setlength{\parskip}{6pt}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+$if(title)$
+\begin{center}
+{\LARGE $title$}
+\end{center}
+$endif$
+
+$body$
+\end{document}
