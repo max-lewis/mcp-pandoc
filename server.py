@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 API_KEY = os.getenv("API_KEY")  # optional
-PDF_ENGINE = "xelatex"          # reliable with modern fonts
+PDF_ENGINE = "xelatex"          # reliable with the TeX packages we install
 
 app = FastAPI()
 
@@ -27,30 +27,31 @@ def _try(cmd: list[str]) -> tuple[int, str, str]:
 
 @app.get("/healthz")
 def healthz():
-    # Report the PDF engine and whether TeX can find lmodern.sty at runtime
-    rc, lm_out, lm_err = _try(["kpsewhich", "lmodern.sty"])
-    lmodern_present = (rc == 0 and bool(lm_out))
-    rc2, xe_out, xe_err = _try(["xelatex", "--version"])
-    rc3, pd_out, pd_err = _try(["pandoc", "-v"])
+    rc_lm, lm_out, lm_err = _try(["kpsewhich", "lmodern.sty"])
+    rc_xe, xe_out, xe_err = _try(["xelatex", "--version"])
+    rc_pd, pd_out, pd_err = _try(["pandoc", "-v"])
     return JSONResponse({
         "ok": True,
         "pdf_engine": PDF_ENGINE,
-        "lmodern_present": lmodern_present,
+        "lmodern_present": (rc_lm == 0 and bool(lm_out)),
         "kpsewhich": lm_out or lm_err,
         "xelatex": (xe_out or xe_err).splitlines()[0] if (xe_out or xe_err) else "",
-        "pandoc": (pd_out or pd_err).splitlines()[0] if (pd_out or pd_err) else ""
+        "pandoc": (pd_out or pd_err).splitlines()[0] if (pd_out or pd_err) else "",
     })
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
+    # Optional key
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid API key")
+
+    # Validate inputs
     if job.input_format not in ("markdown", "html"):
         raise HTTPException(status_code=400, detail="input_format must be 'markdown' or 'html'")
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    # temp dir that we clean AFTER sending the file
+    # Use a temp dir that we clean up AFTER sending the file
     td = tempfile.mkdtemp(prefix="pandoc_")
     cleanup_now = True
     try:
@@ -85,8 +86,8 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             raise HTTPException(status_code=500, detail=detail)
 
         if not os.path.exists(out_path):
-            detail = (proc.stderr or proc.stdout or "").strip() or \
-                     "pandoc reported success but no output file was produced"
+            detail = (proc.stderr or proc.stdout or "").strip() \
+                     or "pandoc reported success but no output file was produced"
             raise HTTPException(status_code=500, detail=detail)
 
         media = (
@@ -103,4 +104,3 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
     finally:
         if cleanup_now:
             shutil.rmtree(td, ignore_errors=True)
-
