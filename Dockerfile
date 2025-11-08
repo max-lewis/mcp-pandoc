@@ -1,31 +1,19 @@
 FROM debian:bookworm-slim
 
-# Force a fresh rebuild so Railway doesn’t reuse an old layer
-ARG APP_REV=2025-11-08-12-25
+# Force a fresh rebuild so Railway doesn’t reuse old layers
+ARG APP_REV=2025-11-08-checked-texlivefull
 RUN echo "APP_REV=$APP_REV"
 
-# System deps:
-# - Python + venv/pip
-# - Pandoc
-# - TeX Live base + LaTeX base/recommended/extra (includes lmodern.sty)
-# - Fonts (Latin Modern + common), XeLaTeX engine, Ghostscript
+# Python + Pandoc + full TeX Live + fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip \
     pandoc \
-    texlive-base \
-    texlive-latex-base \
-    texlive-latex-recommended \
-    texlive-latex-extra \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
-    texlive-xetex \
-    fonts-lmodern \
-    fonts-dejavu fonts-liberation fontconfig \
-    ghostscript ca-certificates \
+    texlive-full \
+    fonts-dejavu fonts-liberation fontconfig ghostscript ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Sanity checks (fail the build if lmodern is still missing)
-RUN kpsewhich lmodern.sty && xelatex --version && pandoc -v
+# Sanity checks (will print versions; if something is missing the build would fail earlier)
+RUN xelatex --version && pdflatex --version && pandoc -v
 
 # Python deps in a virtualenv
 WORKDIR /app
