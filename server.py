@@ -10,6 +10,9 @@ from starlette.background import BackgroundTask
 # Optional API key (set in Railway → Variables → API_KEY)
 API_KEY = os.getenv("API_KEY")
 
+# Choose PDF engine; default to 'tectonic' which auto-fetches LaTeX packages.
+PDF_ENGINE = os.getenv("PDF_ENGINE", "tectonic").strip() or "tectonic"
+
 app = FastAPI()
 
 class Job(BaseModel):
@@ -22,7 +25,7 @@ class Job(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {"ok": True, "pdf_engine": PDF_ENGINE}
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
@@ -35,9 +38,9 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    # Create a temp directory that we control and clean up AFTER sending the file
+    # Create a temp directory that we clean up AFTER sending the file
     td = tempfile.mkdtemp(prefix="pandoc_")
-    cleanup_now = True  # flip to False if we hand cleanup to BackgroundTask
+    cleanup_now = True
 
     try:
         in_ext = "md" if job.input_format == "markdown" else "html"
@@ -49,8 +52,9 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
 
         # Build pandoc command with explicit flags
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
+
         if job.output_format == "pdf":
-            cmd += ["--pdf-engine", "xelatex"]
+            cmd += ["--pdf-engine", PDF_ENGINE]
 
         if job.reference_docx_path and job.output_format == "docx":
             cmd += ["--reference-doc", job.reference_docx_path]
@@ -62,7 +66,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
 
         try:
             proc = subprocess.run(
-                cmd, check=False, capture_output=True, text=True, timeout=180
+                cmd, check=False, capture_output=True, text=True, timeout=240
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="pandoc timed out")
@@ -82,7 +86,6 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             if job.output_format == "docx" else "application/pdf"
         )
 
-        # Let Starlette send the file, then delete the temp directory afterwards
         cleanup_now = False
         return FileResponse(
             out_path,
@@ -94,3 +97,4 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
     finally:
         if cleanup_now:
             shutil.rmtree(td, ignore_errors=True)
+
