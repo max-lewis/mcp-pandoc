@@ -7,11 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-# Optional API key (set in Railway → Variables → API_KEY)
-API_KEY = os.getenv("API_KEY")
-
-# Choose PDF engine; default to 'tectonic' which auto-fetches LaTeX packages.
-PDF_ENGINE = os.getenv("PDF_ENGINE", "tectonic").strip() or "tectonic"
+API_KEY = os.getenv("API_KEY")  # optional
 
 app = FastAPI()
 
@@ -25,23 +21,20 @@ class Job(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "pdf_engine": PDF_ENGINE}
+    return {"ok": True}
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
-    # Optional auth
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid API key")
-
     if job.input_format not in ("markdown", "html"):
         raise HTTPException(status_code=400, detail="input_format must be 'markdown' or 'html'")
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    # Create a temp directory that we clean up AFTER sending the file
+    # use a temp dir that we delete AFTER sending the file
     td = tempfile.mkdtemp(prefix="pandoc_")
     cleanup_now = True
-
     try:
         in_ext = "md" if job.input_format == "markdown" else "html"
         in_path = os.path.join(td, f"in.{in_ext}")
@@ -50,12 +43,9 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
         with open(in_path, "w", encoding="utf-8") as f:
             f.write(job.content)
 
-        # Build pandoc command with explicit flags
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
-
         if job.output_format == "pdf":
-            cmd += ["--pdf-engine", PDF_ENGINE]
-
+            cmd += ["--pdf-engine", "xelatex"]  # use TeX Live XeLaTeX
         if job.reference_docx_path and job.output_format == "docx":
             cmd += ["--reference-doc", job.reference_docx_path]
         if job.defaults_yaml_path:
@@ -66,7 +56,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
 
         try:
             proc = subprocess.run(
-                cmd, check=False, capture_output=True, text=True, timeout=240
+                cmd, check=False, capture_output=True, text=True, timeout=180
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="pandoc timed out")
@@ -85,7 +75,6 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if job.output_format == "docx" else "application/pdf"
         )
-
         cleanup_now = False
         return FileResponse(
             out_path,
@@ -93,7 +82,6 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             filename=f"out.{job.output_format}",
             background=BackgroundTask(shutil.rmtree, td, ignore_errors=True),
         )
-
     finally:
         if cleanup_now:
             shutil.rmtree(td, ignore_errors=True)
