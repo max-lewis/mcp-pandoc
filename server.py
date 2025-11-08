@@ -3,11 +3,12 @@ import shutil
 import subprocess
 import tempfile
 from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 API_KEY = os.getenv("API_KEY")  # optional
+PDF_ENGINE = "xelatex"          # reliable with modern fonts
 
 app = FastAPI()
 
@@ -19,9 +20,26 @@ class Job(BaseModel):
     defaults_yaml_path: str | None = None   # e.g., "/templates/defaults.yaml"
     filters: list[str] | None = None        # e.g., ["/path/to/filter"]
 
+def _try(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a command and return (rc, stdout, stderr) without raising."""
+    p = subprocess.run(cmd, text=True, capture_output=True)
+    return p.returncode, p.stdout.strip(), p.stderr.strip()
+
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    # Report the PDF engine and whether TeX can find lmodern.sty at runtime
+    rc, lm_out, lm_err = _try(["kpsewhich", "lmodern.sty"])
+    lmodern_present = (rc == 0 and bool(lm_out))
+    rc2, xe_out, xe_err = _try(["xelatex", "--version"])
+    rc3, pd_out, pd_err = _try(["pandoc", "-v"])
+    return JSONResponse({
+        "ok": True,
+        "pdf_engine": PDF_ENGINE,
+        "lmodern_present": lmodern_present,
+        "kpsewhich": lm_out or lm_err,
+        "xelatex": (xe_out or xe_err).splitlines()[0] if (xe_out or xe_err) else "",
+        "pandoc": (pd_out or pd_err).splitlines()[0] if (pd_out or pd_err) else ""
+    })
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
@@ -32,7 +50,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    # use a temp dir that we delete AFTER sending the file
+    # temp dir that we clean AFTER sending the file
     td = tempfile.mkdtemp(prefix="pandoc_")
     cleanup_now = True
     try:
@@ -43,9 +61,10 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
         with open(in_path, "w", encoding="utf-8") as f:
             f.write(job.content)
 
+        # Build pandoc command
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
         if job.output_format == "pdf":
-            cmd += ["--pdf-engine", "xelatex"]  # use TeX Live XeLaTeX
+            cmd += ["--pdf-engine", PDF_ENGINE]
         if job.reference_docx_path and job.output_format == "docx":
             cmd += ["--reference-doc", job.reference_docx_path]
         if job.defaults_yaml_path:
@@ -56,7 +75,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
 
         try:
             proc = subprocess.run(
-                cmd, check=False, capture_output=True, text=True, timeout=180
+                cmd, check=False, capture_output=True, text=True, timeout=240
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="pandoc timed out")
@@ -66,9 +85,8 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             raise HTTPException(status_code=500, detail=detail)
 
         if not os.path.exists(out_path):
-            detail = (proc.stderr or proc.stdout or "").strip()
-            if not detail:
-                detail = "pandoc reported success but no output file was produced"
+            detail = (proc.stderr or proc.stdout or "").strip() or \
+                     "pandoc reported success but no output file was produced"
             raise HTTPException(status_code=500, detail=detail)
 
         media = (
