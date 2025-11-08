@@ -1,7 +1,7 @@
 FROM pandoc/latex:latest
 
-# Install Python + FastAPI runtime
-RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
+# Alpine uses apk (not apt-get)
+RUN apk add --no-cache python3 py3-pip
 
 # App deps
 COPY requirements.txt /app/requirements.txt
@@ -10,8 +10,7 @@ RUN pip3 install -r /app/requirements.txt
 WORKDIR /app
 COPY server.py /app/server.py
 
-# OPTIONAL: if you want ready-made defaults/templates from the fork,
-# uncomment the next line (and ensure that path exists in your repo)
+# If you previously tried to copy example templates, comment it out for now
 # COPY examples/defaults /templates
 
 EXPOSE 8080
