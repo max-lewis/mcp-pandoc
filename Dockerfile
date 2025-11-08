@@ -1,15 +1,23 @@
 FROM debian:bookworm-slim
 
-# cache-buster so Railway rebuilds with your new files
-ARG CACHE_BUSTER=2025-11-08-03-25
+# Force rebuild so Railway doesn’t reuse cached layers
+ARG CACHE_BUSTER=2025-11-08-04-20
 RUN echo "cache-buster=$CACHE_BUSTER"
 
-# System deps: Python, venv, Pandoc, LaTeX engine + fonts
+# System deps: Python + venv, Pandoc, LaTeX engine + fonts (incl. lmodern)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip \
     pandoc \
-    texlive texlive-xetex texlive-latex-recommended texlive-fonts-recommended \
+    texlive \
+    texlive-xetex \
+    texlive-latex-base \
+    texlive-latex-recommended \
+    texlive-latex-extra \
+    texlive-fonts-recommended \
+    texlive-fonts-extra \
+    fonts-lmodern \
     fonts-dejavu fonts-liberation fontconfig \
+    ghostscript \
  && rm -rf /var/lib/apt/lists/*
 
 # Python deps in a virtualenv
