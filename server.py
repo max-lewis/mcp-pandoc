@@ -1,9 +1,12 @@
-import os, subprocess, tempfile
+import os
+import subprocess
+import tempfile
 from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-API_KEY = os.getenv("API_KEY")  # optional: set in Railway Variables to require x-api-key
+# Optional API key (set in Railway → Variables → API_KEY)
+API_KEY = os.getenv("API_KEY")
 
 app = FastAPI()
 
@@ -13,7 +16,7 @@ class Job(BaseModel):
     content: str
     reference_docx_path: str | None = None  # e.g., "/templates/reference.docx"
     defaults_yaml_path: str | None = None   # e.g., "/templates/defaults.yaml"
-    filters: list[str] | None = None
+    filters: list[str] | None = None        # e.g., ["/path/to/filter"]
 
 @app.get("/healthz")
 def healthz():
@@ -21,14 +24,14 @@ def healthz():
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
-    # optional auth
+    # Gate by API key if provided
     if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(401, "invalid API key")
+        raise HTTPException(status_code=401, detail="invalid API key")
 
-    if job.output_format not in ("docx", "pdf"):
-        raise HTTPException(400, "output_format must be docx or pdf")
     if job.input_format not in ("markdown", "html"):
-        raise HTTPException(400, "input_format must be markdown or html")
+        raise HTTPException(status_code=400, detail="input_format must be 'markdown' or 'html'")
+    if job.output_format not in ("docx", "pdf"):
+        raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
     with tempfile.TemporaryDirectory() as td:
         in_ext = "md" if job.input_format == "markdown" else "html"
@@ -38,10 +41,8 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
         with open(in_path, "w", encoding="utf-8") as f:
             f.write(job.content)
 
-        # Build pandoc command with explicit flags
+        # Explicit input format; explicit PDF engine
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
-
-        # PDF needs a TeX engine; use xelatex (installed in Dockerfile)
         if job.output_format == "pdf":
             cmd += ["--pdf-engine", "xelatex"]
 
@@ -53,25 +54,22 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             for flt in job.filters:
                 cmd += ["--filter", flt]
 
-        # Run pandoc and capture output for diagnostics
         try:
             proc = subprocess.run(
                 cmd, check=False, capture_output=True, text=True, timeout=180
             )
         except subprocess.TimeoutExpired:
-            raise HTTPException(504, "pandoc timed out")
+            raise HTTPException(status_code=504, detail="pandoc timed out")
 
-        # If pandoc failed, surface stderr/stdout
         if proc.returncode != 0:
-            detail = proc.stderr.strip() or proc.stdout.strip() or "pandoc failed"
-            raise HTTPException(500, detail)
+            detail = (proc.stderr or proc.stdout or "pandoc failed").strip()
+            raise HTTPException(status_code=500, detail=detail)
 
-        # Assert the output file exists
         if not os.path.exists(out_path):
             detail = (proc.stderr or proc.stdout or "").strip()
             if not detail:
                 detail = "pandoc reported success but no output file was produced"
-            raise HTTPException(500, detail)
+            raise HTTPException(status_code=500, detail=detail)
 
         media = (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
