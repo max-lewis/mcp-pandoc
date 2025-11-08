@@ -1,48 +1,38 @@
 FROM debian:bookworm-slim
 
-# Cache-buster so Railway always rebuilds with the latest edits
-ARG APP_REV=2025-11-08-fixed
+# Rebuild cache-buster
+ARG APP_REV=2025-11-08-no-lmodern
 RUN echo "APP_REV=$APP_REV"
 
-# Non-interactive apt (prevents locale / tz prompts)
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
-# ---- System packages ----
-# Python + venv/pip
-# Pandoc (converter)
-# TeX Live minimal set (includes lmodern.sty + XeLaTeX)
-# Fonts and Ghostscript for PDF rendering
+# Python + Pandoc + a minimal TeX stack for XeLaTeX + fonts
+# (no texlive-full, stays well under Railway's 4 GB image limit)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip \
     pandoc \
     texlive-base \
     texlive-latex-base \
     texlive-latex-recommended \
-    texlive-latex-extra \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
     texlive-xetex \
-    fonts-lmodern \
     fonts-dejavu fonts-liberation fontconfig ghostscript ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Hard fail if lmodern.sty isn’t found
-RUN kpsewhich lmodern.sty
-
-# Show versions in build log
+# Optional: show versions in the build log
 RUN xelatex --version && pandoc -v
 
-# ---- Python deps in a virtualenv ----
 WORKDIR /app
+
+# Python deps in a virtualenv
 COPY requirements.txt /app/requirements.txt
 RUN python3 -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /app/requirements.txt
 ENV PATH="/venv/bin:${PATH}" APP_REV="${APP_REV}"
 
-# ---- App code ----
+# App code + custom LaTeX template that does NOT load lmodern
 COPY server.py /app/server.py
+COPY latex-template.tex /app/latex-template.tex
 
-# ---- Web server ----
 EXPOSE 8080
 ENV PORT=8080
 ENTRYPOINT ["/bin/sh","-c"]
