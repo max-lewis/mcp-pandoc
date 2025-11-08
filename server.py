@@ -8,7 +8,12 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 API_KEY = os.getenv("API_KEY")  # optional
-PDF_ENGINE = "xelatex"          # reliable with the TeX packages we install
+PDF_ENGINE = "xelatex"          # we run xelatex with a custom template
+
+TEMPLATE_PATH = "/app/latex-template.tex"
+MAINFONT = "DejaVu Serif"
+SANSFONT = "DejaVu Sans"
+MONOFONT = "DejaVu Sans Mono"
 
 app = FastAPI()
 
@@ -20,38 +25,34 @@ class Job(BaseModel):
     defaults_yaml_path: str | None = None   # e.g., "/templates/defaults.yaml"
     filters: list[str] | None = None        # e.g., ["/path/to/filter"]
 
-def _try(cmd: list[str]) -> tuple[int, str, str]:
-    """Run a command and return (rc, stdout, stderr) without raising."""
+def _run(cmd: list[str]) -> tuple[int, str, str]:
     p = subprocess.run(cmd, text=True, capture_output=True)
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 @app.get("/healthz")
 def healthz():
-    rc_lm, lm_out, lm_err = _try(["kpsewhich", "lmodern.sty"])
-    rc_xe, xe_out, xe_err = _try(["xelatex", "--version"])
-    rc_pd, pd_out, pd_err = _try(["pandoc", "-v"])
+    rc_xe, xe_out, xe_err = _run(["xelatex", "--version"])
+    rc_pd, pd_out, pd_err = _run(["pandoc", "-v"])
     return JSONResponse({
         "ok": True,
         "pdf_engine": PDF_ENGINE,
-        "lmodern_present": (rc_lm == 0 and bool(lm_out)),
-        "kpsewhich": lm_out or lm_err,
+        "template_present": os.path.exists(TEMPLATE_PATH),
         "xelatex": (xe_out or xe_err).splitlines()[0] if (xe_out or xe_err) else "",
         "pandoc": (pd_out or pd_err).splitlines()[0] if (pd_out or pd_err) else "",
     })
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
-    # Optional key
+    # Optional API key
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid API key")
 
-    # Validate inputs
     if job.input_format not in ("markdown", "html"):
         raise HTTPException(status_code=400, detail="input_format must be 'markdown' or 'html'")
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    # Use a temp dir that we clean up AFTER sending the file
+    # Temp dir we delete AFTER sending the file
     td = tempfile.mkdtemp(prefix="pandoc_")
     cleanup_now = True
     try:
@@ -64,9 +65,19 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
 
         # Build pandoc command
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
+
         if job.output_format == "pdf":
-            cmd += ["--pdf-engine", PDF_ENGINE]
-        if job.reference_docx_path and job.output_format == "docx":
+            # Use our template that does NOT load lmodern + set fonts
+            cmd += [
+                "--pdf-engine", PDF_ENGINE,
+                "--template", TEMPLATE_PATH,
+                "-V", f"mainfont:{MAINFONT}",
+                "-V", f"sansfont:{SANSFONT}",
+                "-V", f"monofont:{MONOFONT}",
+                "-V", "geometry:margin=1in",
+            ]
+
+        if (job.reference_docx_path and job.output_format == "docx"):
             cmd += ["--reference-doc", job.reference_docx_path]
         if job.defaults_yaml_path:
             cmd += ["--defaults", job.defaults_yaml_path]
@@ -94,6 +105,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if job.output_format == "docx" else "application/pdf"
         )
+
         cleanup_now = False
         return FileResponse(
             out_path,
