@@ -1,9 +1,11 @@
 import os
+import shutil
 import subprocess
 import tempfile
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 # Optional API key (set in Railway → Variables → API_KEY)
 API_KEY = os.getenv("API_KEY")
@@ -24,7 +26,7 @@ def healthz():
 
 @app.post("/convert")
 def convert(job: Job, x_api_key: str | None = Header(default=None)):
-    # Gate by API key if provided
+    # Optional auth
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid API key")
 
@@ -33,7 +35,11 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
     if job.output_format not in ("docx", "pdf"):
         raise HTTPException(status_code=400, detail="output_format must be 'docx' or 'pdf'")
 
-    with tempfile.TemporaryDirectory() as td:
+    # Create a temp directory that we control and clean up AFTER sending the file
+    td = tempfile.mkdtemp(prefix="pandoc_")
+    cleanup_now = True  # flip to False if we hand cleanup to BackgroundTask
+
+    try:
         in_ext = "md" if job.input_format == "markdown" else "html"
         in_path = os.path.join(td, f"in.{in_ext}")
         out_path = os.path.join(td, f"out.{job.output_format}")
@@ -41,7 +47,7 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
         with open(in_path, "w", encoding="utf-8") as f:
             f.write(job.content)
 
-        # Explicit input format; explicit PDF engine
+        # Build pandoc command with explicit flags
         cmd = ["pandoc", "-f", job.input_format, in_path, "-o", out_path]
         if job.output_format == "pdf":
             cmd += ["--pdf-engine", "xelatex"]
@@ -75,4 +81,16 @@ def convert(job: Job, x_api_key: str | None = Header(default=None)):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if job.output_format == "docx" else "application/pdf"
         )
-        return FileResponse(out_path, media_type=media, filename=f"out.{job.output_format}")
+
+        # Let Starlette send the file, then delete the temp directory afterwards
+        cleanup_now = False
+        return FileResponse(
+            out_path,
+            media_type=media,
+            filename=f"out.{job.output_format}",
+            background=BackgroundTask(shutil.rmtree, td, ignore_errors=True),
+        )
+
+    finally:
+        if cleanup_now:
+            shutil.rmtree(td, ignore_errors=True)
