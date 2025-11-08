@@ -16,4 +16,8 @@ COPY server.py /app/server.py
 
 EXPOSE 8080
 ENV PORT=8080
-CMD ["sh","-c","uvicorn server:app --host 0.0.0.0 --port ${PORT}"]
+
+# ---- Start the web server (override Pandoc's ENTRYPOINT) ----
+# Use a shell so ${PORT} expands; default to 8080 if PORT is unset.
+ENTRYPOINT ["/bin/sh","-c"]
+CMD ["/venv/bin/uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080}"]
